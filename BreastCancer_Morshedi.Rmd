@@ -1,0 +1,910 @@
+---
+title: "Breast Cancer Recurrence Statistical Analysis"
+author: "Elham Morshedi"
+output:
+  html_document:
+    fig_width: 10
+    fig_height: 8
+    code_folding: hide
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: true
+    theme: readable
+---
+
+<style>
+body {
+  font-size: 18px;
+  line-height: 1.6;
+}
+h1, h2, h3, h4 {
+  color: #2c3e50;
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 20px 0;
+}
+th, td {
+  border: 1px solid #ddd;
+  padding: 12px;
+  text-align: left;
+}
+th {
+  background-color: #3498db;
+  color: white;
+}
+tr:nth-child(even) {
+  background-color: #f2f2f2;
+}
+</style>
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.width=10, fig.height=8,
+                      echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+# Research Scenario and Questions
+
+Breast cancer is a significant global health concern, and understanding factors that may lead to recurrence is vital for patient care and treatment planning. This project investigates the relationships between various patient characteristics and tumor features with breast cancer recurrence using the UCI Machine Learning Repository's Breast Cancer dataset.
+
+**Data Source:** UCI Machine Learning Repository - Breast Cancer Dataset  
+**Dataset Size:** 286 patients with complete data  
+**Analysis Period:** Retrospective analysis  
+**Statistical Methods:** Multiple regression, ANOVA, logistic regression, hypothesis testing
+
+---
+
+## Dataset Description
+
+The dataset contains information from breast cancer patients, including demographic information, tumor characteristics, and whether recurrence occurred. The variables include:
+
+1. **Class**: Target variable - no-recurrence-events or recurrence-events
+2. **Age**: Patient's age in categories (20-29, 30-39, 40-49, 50-59, 60-69, 70-79)
+3. **Menopause**: Menopause status (lt40, ge40, premeno)
+4. **Tumor_Size**: Size of tumor in categories (0-4cm, 5-9cm, etc.)
+5. **Inv_Nodes**: Number of positive axillary lymph nodes (0-2, 3-5, 6-8, etc.)
+6. **Node_Caps**: Whether caps of lymph nodes are penetrated (yes, no)
+7. **Deg_Malig**: Degree of malignancy (1, 2, 3)
+8. **Breast**: Left or right breast
+9. **Breast_Quad**: Quadrant of the breast (left-up, left-low, right-up, right-low, central)
+10. **Irradiat**: Whether the patient received radiation therapy (yes, no)
+
+---
+
+## Research Questions
+
+Below are 12 research questions organized by module, covering various statistical concepts:
+
+### Module 1: Descriptive Statistics and Normal Distribution
+- **Question 1**: What are the summary statistics for tumor size in patients with and without recurrence? Is there evidence that tumor size follows a normal distribution in each group?
+- **Question 2**: What is the probability that a patient from this dataset has a tumor size greater than 4cm, assuming tumor sizes follow a normal distribution?
+
+### Module 2: Statistical Inference and Hypothesis Testing
+- **Question 3**: Is there a significant difference in tumor size between patients who experienced recurrence and those who did not?
+- **Question 4**: Is there a significant difference in the number of invasive nodes between patients who received radiation therapy and those who did not?
+
+### Module 3: Correlation and Simple Linear Regression
+- **Question 5**: Is there a correlation between tumor size and the number of invasive nodes? How strong is this relationship?
+- **Question 6**: Can we predict the degree of malignancy based on tumor size using simple linear regression?
+
+### Module 4: Multiple Linear Regression
+- **Question 7**: Can we predict the number of invasive nodes based on tumor size, degree of malignancy, and age group?
+- **Question 8**: Which combination of variables best predicts tumor size in this dataset?
+
+### Module 5: Analysis of Variance (ANOVA)
+- **Question 9**: Is there a significant difference in tumor size across different age groups?
+- **Question 10**: Is there a significant difference in the degree of malignancy across different breast quadrants, controlling for age?
+
+### Module 6: Logistic Regression and Proportions
+- **Question 11**: What is the proportion of patients receiving radiation therapy who experienced recurrence? Does this proportion differ significantly from those not receiving radiation therapy?
+- **Question 12**: Can we predict cancer recurrence based on tumor size, invasive nodes, and degree of malignancy using logistic regression? How accurate is this model?
+```{r libraries, message=FALSE, warning=FALSE}
+# Load required libraries
+library(ggplot2)
+library(dplyr)
+library(pROC)
+library(car)
+library(lmtest)
+library(knitr)
+```
+
+# Data Import and Preprocessing
+
+The dataset was imported from the UCI repository and preprocessed to handle categorical variables and missing values.
+```{r data-import, echo=TRUE}
+# Load the dataset from UCI Machine Learning Repository
+url <- "https://archive.ics.uci.edu/ml/machine-learning-databases/breast-cancer/breast-cancer.data"
+
+column_names <- c("Class", "Age", "Menopause", "Tumor_Size", "Inv_Nodes",
+                  "Node_Caps", "Deg_Malig", "Breast", "Breast_Quad", "Irradiat")
+
+bc_data <- read.csv(url, header = FALSE, col.names = column_names, na.strings = "?")
+
+# Convert Class to binary (1 = recurrence, 0 = no recurrence)
+bc_data$Recurrence <- ifelse(bc_data$Class == "recurrence-events", 1, 0)
+
+# Convert categorical variables to factors
+bc_data$Age <- as.factor(bc_data$Age)
+bc_data$Menopause <- as.factor(bc_data$Menopause)
+bc_data$Node_Caps <- as.factor(bc_data$Node_Caps)
+bc_data$Breast <- as.factor(bc_data$Breast)
+bc_data$Breast_Quad <- as.factor(bc_data$Breast_Quad)
+bc_data$Irradiat <- as.factor(bc_data$Irradiat)
+
+# Convert tumor size to numeric (extract midpoint of range)
+bc_data$Tumor_Size_Numeric <- NA
+for(i in 1:nrow(bc_data)) {
+  size_range <- bc_data$Tumor_Size[i]
+  numbers <- as.numeric(unlist(strsplit(gsub("cm", "", size_range), "-")))
+  if(length(numbers) == 2) {
+    bc_data$Tumor_Size_Numeric[i] <- mean(numbers)
+  }
+}
+
+# Convert invasive nodes to numeric
+bc_data$Inv_Nodes_Numeric <- NA
+for(i in 1:nrow(bc_data)) {
+  node_range <- bc_data$Inv_Nodes[i]
+  numbers <- as.numeric(unlist(strsplit(node_range, "-")))
+  if(length(numbers) == 2) {
+    bc_data$Inv_Nodes_Numeric[i] <- mean(numbers)
+  }
+}
+
+# Handle missing values
+bc_data <- na.omit(bc_data)
+
+cat("Dataset dimensions:", dim(bc_data), "\n")
+cat("Number of patients:", nrow(bc_data), "\n")
+cat("Number of variables:", ncol(bc_data), "\n")
+```
+
+**Preprocessing Notes:** Categorical ranges were converted to numeric midpoints for analysis. For example, tumor size ranges were converted to midpoints (e.g., "30-34cm" → 32cm). Missing values were removed, resulting in a complete dataset of 286 patients.
+
+---
+
+# Module 1: Descriptive Statistics and Normal Distribution
+
+## Question 1: Summary Statistics and Normality of Tumor Size by Recurrence Status
+```{r tumor-descriptive, echo=TRUE}
+# Separate data by recurrence status
+recurrence_yes <- bc_data[bc_data$Recurrence == 1, ]
+recurrence_no <- bc_data[bc_data$Recurrence == 0, ]
+
+# Summary statistics
+summary_yes <- summary(recurrence_yes$Tumor_Size_Numeric)
+summary_no <- summary(recurrence_no$Tumor_Size_Numeric)
+sd_yes <- sd(recurrence_yes$Tumor_Size_Numeric)
+sd_no <- sd(recurrence_no$Tumor_Size_Numeric)
+
+cat("Summary statistics for tumor size in patients WITH recurrence:\n")
+print(summary_yes)
+cat("Standard deviation:", round(sd_yes, 2), "\n\n")
+
+cat("Summary statistics for tumor size in patients WITHOUT recurrence:\n")
+print(summary_no)
+cat("Standard deviation:", round(sd_no, 2), "\n\n")
+
+# Test for normality (Shapiro-Wilk test)
+normality_yes <- shapiro.test(recurrence_yes$Tumor_Size_Numeric)
+normality_no <- shapiro.test(recurrence_no$Tumor_Size_Numeric)
+
+cat("Shapiro-Wilk test for normality (WITH recurrence):\n")
+cat("W =", round(normality_yes$statistic, 5), ", p-value =", round(normality_yes$p.value, 6), "\n\n")
+
+cat("Shapiro-Wilk test for normality (WITHOUT recurrence):\n")
+cat("W =", round(normality_no$statistic, 5), ", p-value =", round(normality_no$p.value, 7), "\n")
+```
+
+### Key Findings
+
+The summary statistics show that patients with recurrence have larger mean tumor sizes (29.24 cm) compared to patients without recurrence (25.21 cm). However, patients without recurrence show greater variability in tumor size (SD = 10.99) than recurrence patients (SD = 8.78).
+
+The Shapiro-Wilk test results indicate that tumor size in both groups deviates from normality, with p-values well below 0.05 (p = 0.001827 for patients with recurrence and p = 0.0004214 for patients without recurrence). These significant p-values reject the null hypothesis of normal distribution. The W statistics (0.94801 for recurrence and 0.97153 for non-recurrence) further support this conclusion, as they are less than 1, which would indicate perfect normality.
+
+This non-normal distribution suggests that parametric tests assuming normality may not be appropriate for comparing these groups, and non-parametric alternatives should be considered for further analysis of tumor size between recurrence groups.
+```{r tumor-viz, fig.width=12, fig.height=10}
+par(mfrow=c(2,3))
+
+# Histograms with density curves
+hist(recurrence_yes$Tumor_Size_Numeric, main="Tumor Size (WITH recurrence)", 
+     xlab="Tumor Size (cm)", col="lightcoral", border="white", 
+     breaks=10, probability=TRUE)
+lines(density(recurrence_yes$Tumor_Size_Numeric), col="red", lwd=2)
+abline(v=mean(recurrence_yes$Tumor_Size_Numeric), col="darkred", lwd=2, lty=2)
+
+hist(recurrence_no$Tumor_Size_Numeric, main="Tumor Size (WITHOUT recurrence)", 
+     xlab="Tumor Size (cm)", col="lightblue", border="white", 
+     breaks=10, probability=TRUE)
+lines(density(recurrence_no$Tumor_Size_Numeric), col="blue", lwd=2)
+abline(v=mean(recurrence_no$Tumor_Size_Numeric), col="darkblue", lwd=2, lty=2)
+
+# Combined histogram
+hist(bc_data$Tumor_Size_Numeric, main="Tumor Size (All Patients)", 
+     xlab="Tumor Size (cm)", col="lightgreen", border="white", 
+     breaks=12, probability=TRUE)
+lines(density(bc_data$Tumor_Size_Numeric), col="darkgreen", lwd=2)
+abline(v=mean(bc_data$Tumor_Size_Numeric), col="darkgreen", lwd=2, lty=2)
+
+# Q-Q plots
+qqnorm(recurrence_yes$Tumor_Size_Numeric, main="Q-Q Plot (WITH recurrence)",
+       col="red", pch=19)
+qqline(recurrence_yes$Tumor_Size_Numeric, col="darkred", lwd=2)
+
+qqnorm(recurrence_no$Tumor_Size_Numeric, main="Q-Q Plot (WITHOUT recurrence)",
+       col="blue", pch=19)
+qqline(recurrence_no$Tumor_Size_Numeric, col="darkblue", lwd=2)
+
+# Boxplot comparison
+boxplot(Tumor_Size_Numeric ~ Recurrence, data = bc_data, 
+        main="Tumor Size by Recurrence Status",
+        xlab="Recurrence (0=No, 1=Yes)", ylab="Tumor Size (cm)",
+        col=c("lightblue", "lightcoral"), notch=TRUE)
+points(c(1,2), c(mean(recurrence_no$Tumor_Size_Numeric), 
+                 mean(recurrence_yes$Tumor_Size_Numeric)), 
+       pch=18, col="darkred", cex=2)
+legend("topleft", legend=c("Mean"), pch=18, col="darkred")
+
+par(mfrow=c(1,1))
+```
+
+### Visual Interpretation
+
+The Q-Q plots for both groups show deviations from the diagonal line that would indicate perfect normality. This visual evidence supports the Shapiro-Wilk test results. The boxplot shows the difference in distributions between the two groups, with the recurrence group (1) having a slightly higher median and mean (represented by the diamond marker) than the non-recurrence group (0), though there is substantial overlap between the groups.
+```{r table1, results='asis'}
+# Create summary table
+table1_data <- data.frame(
+  Statistic = c("Sample Size", "Mean (cm)", "Median (cm)", "Standard Deviation", 
+                "Minimum (cm)", "Maximum (cm)", "Shapiro-Wilk W", "Shapiro-Wilk p-value"),
+  Recurrence = c(length(recurrence_yes$Tumor_Size_Numeric), 
+                 round(mean(recurrence_yes$Tumor_Size_Numeric), 2),
+                 round(median(recurrence_yes$Tumor_Size_Numeric), 2),
+                 round(sd_yes, 2),
+                 round(min(recurrence_yes$Tumor_Size_Numeric), 2),
+                 round(max(recurrence_yes$Tumor_Size_Numeric), 2),
+                 round(normality_yes$statistic, 3),
+                 format(normality_yes$p.value, digits=4, scientific=FALSE)),
+  No_Recurrence = c(length(recurrence_no$Tumor_Size_Numeric),
+                    round(mean(recurrence_no$Tumor_Size_Numeric), 2),
+                    round(median(recurrence_no$Tumor_Size_Numeric), 2),
+                    round(sd_no, 2),
+                    round(min(recurrence_no$Tumor_Size_Numeric), 2),
+                    round(max(recurrence_no$Tumor_Size_Numeric), 2),
+                    round(normality_no$statistic, 3),
+                    format(normality_no$p.value, digits=4, scientific=FALSE))
+)
+
+kable(table1_data, col.names = c("Statistic", "Recurrence Group", "No Recurrence Group"),
+      caption = "Table 1: Tumor Size Characteristics by Recurrence Status")
+```
+
+---
+
+## Question 2: Probability of Tumor Size > 4cm Assuming Normal Distribution
+```{r probability}
+mean_tumor <- mean(bc_data$Tumor_Size_Numeric)
+sd_tumor <- sd(bc_data$Tumor_Size_Numeric)
+
+prob_gt_4 <- 1 - pnorm(4, mean = mean_tumor, sd = sd_tumor)
+actual_prop_gt_4 <- mean(bc_data$Tumor_Size_Numeric > 4)
+
+cat("Mean tumor size:", round(mean_tumor, 2), "cm\n")
+cat("Standard deviation:", round(sd_tumor, 2), "cm\n\n")
+cat("Theoretical probability (assuming normal distribution):", round(prob_gt_4, 4), "\n")
+cat("Actual proportion in the data:", round(actual_prop_gt_4, 4), "\n")
+```
+
+### Interpretation
+
+1. **Theoretical probability** (assuming normal distribution): `r round(prob_gt_4, 4)` - This was calculated using the normal probability function with the mean and standard deviation of the entire dataset.
+
+2. **Actual proportion** in the data: `r round(actual_prop_gt_4, 4)` - This represents the real percentage of tumors larger than 4cm in the dataset.
+
+The close agreement between these two values suggests that despite the Shapiro-Wilk test showing significant deviations from normality, the normal distribution approximation still provides a reasonably accurate estimate for this probability calculation.
+
+In practical terms, this means about 97-98% of tumors in this dataset are larger than 4cm, which is quite high. This could be clinically significant since larger tumor sizes are often associated with more advanced disease states.
+
+---
+
+# Module 2: Statistical Inference and Hypothesis Testing
+
+## Question 3: Difference in Tumor Size Between Recurrence Groups
+```{r ttest-tumor, echo=TRUE}
+tumor_ttest <- t.test(Tumor_Size_Numeric ~ Recurrence, data = bc_data)
+print(tumor_ttest)
+```
+
+### 5-Step Hypothesis Testing Approach
+
+**1. Hypotheses:**
+- H₀: μ₁ = μ₂ (No difference in mean tumor size between recurrence and non-recurrence groups)
+- H₁: μ₁ ≠ μ₂ (There is a difference in mean tumor size between the groups)
+- Alpha level: 0.05
+
+**2. Test Statistic:**
+- Two-sample t-test (Welch's t-test with unequal variances)
+
+**3. Decision Rule:**
+- Reject H₀ if |t| > t(critical) or if p-value < 0.05
+
+**4. Computation:**
+- t-statistic: `r round(tumor_ttest$statistic, 3)`
+- Degrees of freedom: `r round(tumor_ttest$parameter, 2)`
+- p-value: `r format(tumor_ttest$p.value, digits=4, scientific=FALSE)`
+- 95% CI for difference: [`r round(tumor_ttest$conf.int[1], 2)`, `r round(tumor_ttest$conf.int[2], 2)`]
+- Sample estimates:
+  - Mean in group 0 (no recurrence): `r round(tumor_ttest$estimate[1], 2)`
+  - Mean in group 1 (recurrence): `r round(tumor_ttest$estimate[2], 2)`
+
+**5. Conclusion:**
+
+Since |t| = `r abs(round(tumor_ttest$statistic, 3))` > 1.96 (critical value at α = 0.05) and p = `r format(tumor_ttest$p.value, digits=4, scientific=FALSE)` < 0.05, we **reject H₀**.
+
+There is a statistically significant difference in tumor size between patients with and without recurrence. Patients who experienced recurrence had significantly larger tumors (mean = 29.24 cm) compared to those without recurrence (mean = 25.21 cm). The 95% confidence interval for the difference in means does not include zero, confirming the statistical significance of this finding. This suggests that **larger tumor size may be a risk factor for breast cancer recurrence**.
+```{r ttest-viz1}
+boxplot(Tumor_Size_Numeric ~ Recurrence, data = bc_data, 
+        main="Tumor Size by Recurrence Status",
+        xlab="Recurrence (0=No, 1=Yes)", ylab="Tumor Size (cm)",
+        col=c("lightgreen", "lightblue"))
+```
+
+### Visual Interpretation
+
+The boxplot shows the distribution of tumor sizes between the two recurrence groups. While the medians of both groups appear similar (around 27 cm), the t-test found a significant difference in means (25.21 vs 29.24). The recurrence group has a slightly higher quartile range overall, suggesting more concentration of values in the middle size range. The visualization shows that while there is substantial overlap between the groups, the statistical test confirms a meaningful difference.
+```{r table2, results='asis'}
+table2_data <- data.frame(
+  Group = c("No Recurrence", "Recurrence", "Mean Difference"),
+  N = c(nrow(recurrence_no), nrow(recurrence_yes), NA),
+  Mean = c(round(mean(recurrence_no$Tumor_Size_Numeric), 2),
+           round(mean(recurrence_yes$Tumor_Size_Numeric), 2),
+           round(mean(recurrence_yes$Tumor_Size_Numeric) - mean(recurrence_no$Tumor_Size_Numeric), 2)),
+  SD = c(round(sd_no, 2), round(sd_yes, 2), NA),
+  t_value = c(NA, NA, round(tumor_ttest$statistic, 3)),
+  df = c(NA, NA, round(tumor_ttest$parameter, 2)),
+  p_value = c(NA, NA, format(tumor_ttest$p.value, digits=4, scientific=FALSE)),
+  CI_95 = c(NA, NA, paste0("[", round(tumor_ttest$conf.int[1], 2), ", ", 
+                           round(tumor_ttest$conf.int[2], 2), "]"))
+)
+
+kable(table2_data, col.names = c("Group", "N", "Mean (cm)", "SD", "t-value", "df", "p-value", "95% CI"),
+      caption = "Table 2: T-test Results for Tumor Size Comparison")
+```
+
+---
+
+## Question 4: Difference in Invasive Nodes Between Radiation Therapy Groups
+```{r ttest-nodes, echo=TRUE}
+nodes_ttest <- t.test(Inv_Nodes_Numeric ~ Irradiat, data = bc_data)
+print(nodes_ttest)
+```
+
+### 5-Step Hypothesis Testing Approach
+
+**1. Hypotheses:**
+- H₀: μ₁ = μ₂ (No difference in mean number of invasive nodes between radiation therapy groups)
+- H₁: μ₁ ≠ μ₂ (There is a difference in mean number of invasive nodes between radiation therapy groups)
+- Alpha level: 0.05
+
+**2. Test Statistic:**
+- Two-sample t-test (with unequal variances)
+
+**3. Decision Rule:**
+- Reject H₀ if |t| > t(critical) or if p-value < 0.05
+
+**4. Computation:**
+- t-statistic: `r round(nodes_ttest$statistic, 2)`
+- Degrees of freedom: `r round(nodes_ttest$parameter, 3)`
+- p-value: `r format(nodes_ttest$p.value, digits=4, scientific=TRUE)`
+- 95% CI for difference: [`r round(nodes_ttest$conf.int[1], 2)`, `r round(nodes_ttest$conf.int[2], 2)`]
+- Sample estimates:
+  - Mean in group "no" (no radiation): `r round(nodes_ttest$estimate[1], 2)`
+  - Mean in group "yes" (received radiation): `r round(nodes_ttest$estimate[2], 2)`
+
+**5. Conclusion:**
+
+Since |t| = `r abs(round(nodes_ttest$statistic, 2))` > 1.96 (critical value at α = 0.05) and p = `r format(nodes_ttest$p.value, digits=5, scientific=TRUE)` < 0.05, we **reject H₀**.
+
+There is a statistically significant difference in the number of invasive nodes between radiation therapy groups. Patients who received radiation therapy had a significantly higher mean number of invasive nodes (4.57) compared to those who did not receive radiation therapy (1.95). This suggests that **patients with more invasive nodes were more likely to receive radiation therapy**, which aligns with clinical practice where more extensive lymph node involvement often necessitates more aggressive treatment.
+```{r ttest-viz2}
+boxplot(Inv_Nodes_Numeric ~ Irradiat, data = bc_data, 
+        main="Invasive Nodes by Radiation Therapy Status",
+        xlab="Radiation Therapy", ylab="Number of Invasive Nodes",
+        col=c("lightpink", "lightyellow"))
+```
+
+The boxplot clearly illustrates this difference, showing that the "yes" group has a higher median and a wider range of values, with the majority of patients who didn't receive radiation therapy having very few invasive nodes.
+
+---
+
+# Module 3: Correlation and Simple Linear Regression
+
+## Question 5: Correlation Between Tumor Size and Invasive Nodes
+```{r correlation, echo=TRUE}
+correlation <- cor.test(bc_data$Tumor_Size_Numeric, bc_data$Inv_Nodes_Numeric)
+print(correlation)
+```
+
+### Key Finding
+
+The Pearson correlation test shows a **statistically significant but weak positive correlation** between tumor size and the number of invasive nodes:
+
+- Correlation coefficient (r): `r round(correlation$estimate, 4)`
+- t-statistic: `r round(correlation$statistic, 4)`
+- Degrees of freedom: `r correlation$parameter`
+- p-value: `r format(correlation$p.value, digits=6, scientific=FALSE)`
+- 95% confidence interval: [`r round(correlation$conf.int[1], 3)`, `r round(correlation$conf.int[2], 3)`]
+
+The 95% confidence interval for the correlation coefficient does not include zero, confirming the statistical significance of this relationship.
+```{r corr-plot}
+plot(bc_data$Tumor_Size_Numeric, bc_data$Inv_Nodes_Numeric,
+     main="Tumor Size vs. Invasive Nodes",
+     xlab="Tumor Size (cm)", ylab="Number of Invasive Nodes",
+     pch=19, col=ifelse(bc_data$Recurrence == 1, "red", "blue"))
+abline(lm(Inv_Nodes_Numeric ~ Tumor_Size_Numeric, data = bc_data), col="black", lwd=2)
+legend("topleft", legend=c("Recurrence", "No Recurrence"), 
+       col=c("red", "blue"), pch=19)
+```
+
+### Visual Analysis
+
+Looking at the scatter plot:
+
+1. There is a slight positive trend indicated by the black regression line, which slopes upward from left to right.
+2. Most data points are clustered at lower values of invasive nodes (below 5), regardless of tumor size.
+3. Red points (patients with recurrence) appear to be more prevalent and have a wider distribution in terms of invasive nodes compared to blue points (patients without recurrence).
+4. There are several outliers with high numbers of invasive nodes, particularly one patient with approximately 25 invasive nodes.
+5. The relationship appears to be heteroscedastic, with greater variability in invasive node counts as tumor size increases.
+
+The significant but weak correlation (r = 0.1605) suggests that while larger tumors tend to be associated with higher numbers of invasive nodes, **tumor size alone is not a strong predictor of lymph node involvement**. This indicates that other factors not captured in this analysis likely play important roles in determining the extent of lymph node invasion in breast cancer.
+
+---
+
+## Question 6: Predicting Degree of Malignancy from Tumor Size
+```{r simple-regression, echo=TRUE}
+malignancy_model <- lm(Deg_Malig ~ Tumor_Size_Numeric, data = bc_data)
+summary(malignancy_model)
+
+# ANOVA table
+anova(malignancy_model)
+```
+
+### Global F-test (ANOVA) for the Regression Model
+
+**5-Step Hypothesis Testing Approach:**
+
+**1. Hypotheses:**
+- H₀: β = 0 (Tumor size does not predict degree of malignancy)
+- H₁: β ≠ 0 (Tumor size predicts degree of malignancy)
+- Alpha level: 0.05
+
+**2. Test Statistic:**
+- F-test
+
+**3. Decision Rule:**
+- Reject H₀ if F > F(critical) or if p-value < 0.05
+
+**4. Computation:**
+- F-statistic: `r round(summary(malignancy_model)$fstatistic[1], 2)` with 1 and 284 degrees of freedom
+- p-value: `r format(anova(malignancy_model)$"Pr(>F)"[1], digits=7, scientific=FALSE)`
+
+**5. Conclusion:**
+
+Since F = `r round(summary(malignancy_model)$fstatistic[1], 2)` > F(critical) and p = `r format(anova(malignancy_model)$"Pr(>F)"[1], digits=4, scientific=FALSE)` < 0.05, we **reject H₀**.
+
+There is a statistically significant relationship between tumor size and degree of malignancy. The regression equation is:
+
+**Degree of Malignancy = `r round(coef(malignancy_model)[1], 5)` + `r round(coef(malignancy_model)[2], 5)` × Tumor Size**
+
+This means that for each 1cm increase in tumor size, the degree of malignancy is expected to increase by `r round(coef(malignancy_model)[2], 5)` units.
+
+However, the R-squared value is very low (`r round(summary(malignancy_model)$r.squared, 4)`), indicating that tumor size explains only about `r round(summary(malignancy_model)$r.squared * 100, 1)`% of the variability in malignancy degree. While statistically significant, **tumor size alone is not a strong predictor of malignancy degree**, and other factors likely play much more important roles.
+```{r malignancy-plot}
+plot(bc_data$Tumor_Size_Numeric, bc_data$Deg_Malig,
+     main="Tumor Size vs. Degree of Malignancy",
+     xlab="Tumor Size (cm)", ylab="Degree of Malignancy",
+     pch=19, col=ifelse(bc_data$Recurrence == 1, "red", "blue"))
+abline(malignancy_model, col="black", lwd=2)
+legend("topleft", legend=c("Recurrence", "No Recurrence"), 
+       col=c("red", "blue"), pch=19)
+```
+
+---
+
+# Module 4: Multiple Linear Regression
+
+## Question 7: Predicting Invasive Nodes from Multiple Variables
+```{r mlr-nodes, echo=TRUE}
+nodes_model <- lm(Inv_Nodes_Numeric ~ Tumor_Size_Numeric + Deg_Malig + Age, 
+                  data = bc_data)
+summary(nodes_model)
+```
+
+### Model Interpretation
+
+The model is statistically significant overall (F(7, 278) = 5.413, p < 0.001), indicating that at least one of the predictors is significantly related to the number of invasive nodes. However, the R-squared value is relatively low at `r round(summary(nodes_model)$r.squared, 4)`, meaning that these variables together explain only about `r round(summary(nodes_model)$r.squared * 100, 1)`% of the variability in invasive node counts.
+
+**Looking at individual predictors:**
+
+- **Degree of malignancy** is highly significant (p < 0.001) with a coefficient of `r round(coef(nodes_model)["Deg_Malig"], 2)`, indicating that for each one-unit increase in malignancy grade, the predicted number of invasive nodes increases by approximately `r round(coef(nodes_model)["Deg_Malig"], 2)`.
+- **Tumor size** shows a marginally significant relationship (p = `r format(summary(nodes_model)$coefficients["Tumor_Size_Numeric", "Pr(>|t|)"], digits=4)`) with invasive nodes.
+- **None of the age categories** shows a significant relationship with invasive nodes compared to the reference category (likely 20-29).
+```{r mlr-diagnostics, fig.width=10, fig.height=8}
+par(mfrow=c(2,2))
+plot(nodes_model)
+par(mfrow=c(1,1))
+```
+
+### Diagnostic Issues
+
+The diagnostic plots reveal several issues:
+
+1. The **Residuals vs Fitted** plot shows a non-random pattern, with the red line trending downward, suggesting the model doesn't capture some important non-linear relationships.
+2. The plot shows **heteroscedasticity** (uneven variance across predicted values), with variance increasing as fitted values increase.
+3. Several **outliers** are visible, particularly observation #268 with a very large positive residual.
+4. **Observation #64** has a leverage of one, suggesting it strongly influences the model fit.
+
+These diagnostic issues indicate the model violates several assumptions of linear regression:
+- The relationship may not be linear
+- Residuals are not homoscedastic (constant variance)
+- There are influential outliers
+
+### Limitation Regarding Observation #64
+
+A key limitation in our multiple regression model is the presence of a data point with perfect leverage (observation #64). **This patient is the only one in the 20-29 age group**, causing this observation to have a leverage value of exactly 1.0. This means this single observation completely determines the coefficient for the 20-29 age category in our model.
+
+This limitation affects the reliability of our age-related coefficients and potentially influences the overall model fit. While the model still shows statistical significance (F(7, 278) = 5.413, p < 0.001) and identifies degree of malignancy as a significant predictor of invasive nodes, **caution should be exercised when interpreting the age effects** in this model.
+
+In future analyses, combining age groups to ensure adequate representation in each category could provide more robust results. Alternatively, considering age as a continuous variable rather than categorical might also mitigate this issue.
+
+---
+
+## Question 8: Best Predictors of Tumor Size
+```{r model-comparison, echo=TRUE}
+# Model 1: Invasive nodes and degree of malignancy
+model1 <- lm(Tumor_Size_Numeric ~ Inv_Nodes_Numeric + Deg_Malig, data = bc_data)
+
+# Model 2: Invasive nodes, degree of malignancy, and age
+model2 <- lm(Tumor_Size_Numeric ~ Inv_Nodes_Numeric + Deg_Malig + Age, data = bc_data)
+
+# Model 3: Invasive nodes, degree of malignancy, and menopause
+model3 <- lm(Tumor_Size_Numeric ~ Inv_Nodes_Numeric + Deg_Malig + Menopause, data = bc_data)
+
+cat("Model 1 (Nodes + Malignancy): Adjusted R² =", 
+    round(summary(model1)$adj.r.squared, 4), "\n")
+cat("Model 2 (Nodes + Malignancy + Age): Adjusted R² =", 
+    round(summary(model2)$adj.r.squared, 4), "\n")
+cat("Model 3 (Nodes + Malignancy + Menopause): Adjusted R² =", 
+    round(summary(model3)$adj.r.squared, 4), "\n")
+
+# Display best model
+cat("\n--- Best Model (Model 1) ---\n")
+summary(model1)
+```
+
+### Model Comparison Results
+
+**1. Model 1 (Invasive nodes and degree of malignancy):**
+- The model is statistically significant (F(2, 283) = 8.461, p < 0.001)
+- Only degree of malignancy is a significant predictor (p = 0.003)
+- Adjusted R² = `r round(summary(model1)$adj.r.squared, 4)` (approximately `r round(summary(model1)$adj.r.squared * 100, 1)`% variance explained)
+
+**2. Model 2 (Invasive nodes, degree of malignancy, and age):**
+- The model is statistically significant (F(7, 278) = 2.677, p = 0.011)
+- Degree of malignancy remains significant (p = 0.003)
+- Invasive nodes is marginally significant (p = 0.098)
+- No age categories are significant predictors
+- Adjusted R² = `r round(summary(model2)$adj.r.squared, 4)` (approximately `r round(summary(model2)$adj.r.squared * 100, 1)`% variance explained)
+- Note: This model includes observation #64 with perfect leverage as discussed previously
+
+**3. Model 3 (Invasive nodes, degree of malignancy, and menopause status):**
+- The model is statistically significant (F(4, 281) = 4.382, p = 0.002)
+- Only degree of malignancy is a significant predictor (p = 0.003)
+- Adjusted R² = `r round(summary(model3)$adj.r.squared, 4)` (approximately `r round(summary(model3)$adj.r.squared * 100, 1)`% variance explained)
+
+### Conclusion
+
+Comparing the adjusted R-squared values across models, **Model 1 (invasive nodes and degree of malignancy) provides the best fit** with the highest adjusted R-squared (`r round(summary(model1)$adj.r.squared, 4)`). Adding age (Model 2) or menopause status (Model 3) actually reduces the explanatory power of the model when accounting for the number of predictors.
+
+In all three models, **degree of malignancy** consistently emerges as the only significant predictor of tumor size, with higher malignancy grades associated with larger tumors. The coefficient (approximately `r round(coef(model1)["Deg_Malig"], 1)`) indicates that for each one-unit increase in malignancy grade, tumor size is predicted to increase by about `r round(coef(model1)["Deg_Malig"], 1)` cm.
+
+However, it's important to note that even the best model explains only about `r round(summary(model1)$adj.r.squared * 100, 1)`% of the variance in tumor size, suggesting that **other factors not included in these models likely play more important roles** in determining tumor size in breast cancer patients.
+
+---
+
+# Module 5: Analysis of Variance (ANOVA)
+
+## Question 9: Difference in Tumor Size Across Age Groups
+```{r anova-age, echo=TRUE}
+age_anova <- aov(Tumor_Size_Numeric ~ Age, data = bc_data)
+summary(age_anova)
+
+tukey_age <- TukeyHSD(age_anova)
+print(tukey_age)
+```
+
+### Results Interpretation
+
+The one-way ANOVA test shows **no statistically significant differences** in tumor size across the age groups:
+
+- F-statistic: F(5, 280) = `r round(summary(age_anova)[[1]]["Age", "F value"], 3)`
+- p-value: `r round(summary(age_anova)[[1]]["Age", "Pr(>F)"], 2)`
+
+The high p-value (0.84) indicates that we **fail to reject the null hypothesis** that all age groups have the same mean tumor size.
+
+Looking at the specific comparisons using Tukey's post-hoc test:
+
+- None of the pairwise comparisons between age groups showed statistically significant differences (all p-adjusted values > 0.80)
+- The largest mean difference was observed between the 70-79 and 20-29 age groups (difference = -14.17), but this was not statistically significant (p = 0.82)
+- Even the smallest p-value in the comparisons (50-59 vs. 70-79) is far from statistical significance (p = 0.96)
+```{r anova-viz}
+boxplot(Tumor_Size_Numeric ~ Age, data = bc_data,
+        main="Tumor Size Across Age Groups",
+        xlab="Age Group", ylab="Tumor Size (cm)",
+        col=rainbow(length(levels(bc_data$Age))))
+```
+
+### Conclusion
+
+The boxplot visualization confirms this lack of significant differences, showing similar distributions of tumor sizes across all age groups.
+
+These results suggest that **age alone is not a significant predictor of tumor size** in this breast cancer dataset. Other factors, such as degree of malignancy (which we identified as significant in Question 8), appear to be more important determinants of tumor size than the patient's age.
+
+---
+
+## Question 10: Difference in Malignancy Across Breast Quadrants, Controlling for Age
+```{r ancova, echo=TRUE}
+# Two-way ANOVA with interaction
+ancova_model <- aov(Deg_Malig ~ Breast_Quad + Age + Breast_Quad:Age, data = bc_data)
+summary(ancova_model)
+
+# Model without interaction (more parsimonious)
+ancova_model_no_interaction <- aov(Deg_Malig ~ Breast_Quad + Age, data = bc_data)
+summary(ancova_model_no_interaction)
+
+# Post-hoc test for breast quadrant
+tukey_quad <- TukeyHSD(ancova_model_no_interaction, "Breast_Quad")
+print(tukey_quad)
+```
+
+### Results Interpretation
+
+The two-way ANOVA with interaction shows:
+
+- **No significant effect of breast quadrant** on degree of malignancy (F(5, 259) = 0.809, p = 0.544)
+- **No significant effect of age** on degree of malignancy (F(5, 259) = 0.888, p = 0.490)
+- **No significant interaction** between breast quadrant and age (F(16, 259) = 0.856, p = 0.620)
+
+Since the interaction term was not significant, a more parsimonious model without interaction was tested, which confirmed:
+
+- No significant effect of breast quadrant (F(5, 275) = 0.816, p = 0.539)
+- No significant effect of age (F(5, 275) = 0.895, p = 0.485)
+
+Tukey's post-hoc tests for breast quadrant also showed **no significant pairwise differences** between any quadrants (all p-values > 0.65).
+```{r interaction-plot}
+interaction.plot(bc_data$Breast_Quad, bc_data$Age, bc_data$Deg_Malig,
+                 main="Interaction Plot: Breast Quadrant and Age",
+                 xlab="Breast Quadrant", ylab="Mean Degree of Malignancy",
+                 trace.label="Age Group", col=1:6, lty=1:6)
+```
+
+### Visual Interpretation
+
+The interaction plot visually confirms these findings, showing:
+
+1. Different patterns of malignancy across breast quadrants for different age groups, but without any consistent pattern
+2. The line for the 50-59 age group shows a notably higher malignancy for the "NA" breast quadrant, but this appears to be due to limited observations
+3. The 70-79 age group shows consistently lower malignancy scores in several quadrants, but again, this difference is not statistically significant
+
+### Conclusion
+
+This analysis does not support any significant relationship between breast quadrant and degree of malignancy, even when controlling for patient age. **The location of the tumor within the breast does not appear to be associated with its malignancy grade** in this dataset.
+
+---
+
+# Module 6: Logistic Regression and Proportions
+
+## Question 11: Proportion of Recurrence with Radiation Therapy
+```{r proportions, echo=TRUE}
+radiation_table <- table(bc_data$Irradiat, bc_data$Recurrence)
+print(radiation_table)
+
+prop_recurrence_radiation <- radiation_table[2,2] / sum(radiation_table[2,])
+prop_recurrence_no_radiation <- radiation_table[1,2] / sum(radiation_table[1,])
+
+cat("\nRecurrence rate WITH radiation:", round(prop_recurrence_radiation, 4), 
+    "(", round(prop_recurrence_radiation * 100, 2), "%)\n")
+cat("Recurrence rate WITHOUT radiation:", round(prop_recurrence_no_radiation, 4),
+    "(", round(prop_recurrence_no_radiation * 100, 2), "%)\n\n")
+
+# Proportion test
+prop_test <- prop.test(c(radiation_table[2,2], radiation_table[1,2]), 
+                       c(sum(radiation_table[2,]), sum(radiation_table[1,])))
+print(prop_test)
+
+# Chi-square test
+chisq_test <- chisq.test(radiation_table)
+print(chisq_test)
+```
+
+### 5-Step Hypothesis Testing Approach for Comparing Proportions
+
+**1. Hypotheses:**
+- H₀: p₁ = p₂ (Equal proportions of recurrence among radiation and non-radiation groups)
+- H₁: p₁ ≠ p₂ (Different proportions of recurrence between radiation and non-radiation groups)
+- Alpha level: 0.05
+
+**2. Test Statistic:**
+- Chi-square test for independence
+
+**3. Decision Rule:**
+- Reject H₀ if χ² > χ²(critical) or if p-value < 0.05
+
+**4. Computation:**
+- χ²-statistic: `r round(chisq_test$statistic, 4)`
+- Degrees of freedom: `r chisq_test$parameter`
+- p-value: `r format(chisq_test$p.value, digits=6, scientific=FALSE)`
+- 95% CI for difference in proportions: [`r round(prop_test$conf.int[1], 3)`, `r round(prop_test$conf.int[2], 3)`]
+
+**5. Conclusion:**
+
+Since χ² = `r round(chisq_test$statistic, 2)` > 3.84 (critical value for df=1, α=0.05) and p = `r format(chisq_test$p.value, digits=4, scientific=FALSE)` < 0.05, we **reject H₀**.
+
+Among patients who received radiation therapy, **`r round(prop_recurrence_radiation * 100, 2)`%** experienced recurrence, compared to **`r round(prop_recurrence_no_radiation * 100, 2)`%** of patients who did not receive radiation therapy. The chi-square test shows that this difference is statistically significant.
+
+The proportion test confirms this finding, with a 95% confidence interval for the difference in proportions of [`r round(prop_test$conf.int[1]*100, 2)`%, `r round(prop_test$conf.int[2]*100, 2)`%]. This suggests that patients who received radiation therapy had a higher recurrence rate.
+
+**However, this does not necessarily mean that radiation therapy increases recurrence risk**; rather, patients receiving radiation therapy likely had more severe disease to begin with, necessitating more aggressive treatment. This is an example of **selection bias** in observational studies.
+```{r table3, results='asis'}
+table3_data <- data.frame(
+  Radiation = c("Yes", "No", "Chi-square", "p-value", "95% CI for difference"),
+  Recurrence = c(radiation_table[2,2], radiation_table[1,2], 
+                 round(chisq_test$statistic, 2), 
+                 format(chisq_test$p.value, digits=4, scientific=FALSE),
+                 paste0("[", round(prop_test$conf.int[1]*100, 2), "%, ", 
+                        round(prop_test$conf.int[2]*100, 2), "%]")),
+  No_Recurrence = c(radiation_table[2,1], radiation_table[1,1], "", "", ""),
+  Total = c(sum(radiation_table[2,]), sum(radiation_table[1,]), "", "", ""),
+  Rate = c(paste0(round(prop_recurrence_radiation*100, 2), "%"),
+           paste0(round(prop_recurrence_no_radiation*100, 2), "%"),
+           "", "", "")
+)
+
+kable(table3_data, col.names = c("Radiation Therapy", "Recurrence", "No Recurrence", "Total", "Recurrence Rate"),
+      caption = "Table 3: Contingency Table of Radiation Therapy and Recurrence")
+```
+
+---
+
+## Question 12: Predicting Recurrence with Logistic Regression
+```{r logistic, echo=TRUE}
+logistic_model <- glm(Recurrence ~ Tumor_Size_Numeric + Inv_Nodes_Numeric + Deg_Malig, 
+                      data = bc_data, family = binomial)
+summary(logistic_model)
+
+# Odds ratios and confidence intervals
+odds_ratios <- exp(cbind(OR = coef(logistic_model), confint(logistic_model)))
+cat("\nOdds Ratios and 95% Confidence Intervals:\n")
+print(round(odds_ratios, 3))
+```
+
+### Model Interpretation
+
+The logistic regression model examining the relationship between clinical factors and breast cancer recurrence identified three key predictors with varying levels of significance:
+
+**1. Degree of malignancy** emerged as the strongest predictor:
+- Odds Ratio: `r round(exp(coef(logistic_model)["Deg_Malig"]), 3)`
+- 95% CI: [`r round(odds_ratios["Deg_Malig", 2], 3)`, `r round(odds_ratios["Deg_Malig", 3], 3)`]
+- p-value: `r format(summary(logistic_model)$coefficients["Deg_Malig", "Pr(>|z|)"], digits=4, scientific=TRUE)`
+
+Each one-unit increase in malignancy grade **more than doubles the odds of recurrence**, highlighting the critical importance of tumor grade in prognosis.
+
+**2. Number of invasive nodes** showed a significant relationship:
+- Odds Ratio: `r round(exp(coef(logistic_model)["Inv_Nodes_Numeric"]), 3)`
+- 95% CI: [`r round(odds_ratios["Inv_Nodes_Numeric", 2], 3)`, `r round(odds_ratios["Inv_Nodes_Numeric", 3], 3)`]
+- p-value: `r format(summary(logistic_model)$coefficients["Inv_Nodes_Numeric", "Pr(>|z|)"], digits=3, scientific=FALSE)`
+
+For each additional invasive node identified, the odds of recurrence increase by approximately **`r round((exp(coef(logistic_model)["Inv_Nodes_Numeric"]) - 1) * 100, 1)`%**.
+
+**3. Tumor size** demonstrated a marginally significant effect:
+- Odds Ratio: `r round(exp(coef(logistic_model)["Tumor_Size_Numeric"]), 3)`
+- 95% CI: [`r round(odds_ratios["Tumor_Size_Numeric", 2], 3)`, `r round(odds_ratios["Tumor_Size_Numeric", 3], 3)`]
+- p-value: `r format(summary(logistic_model)$coefficients["Tumor_Size_Numeric", "Pr(>|z|)"], digits=2, scientific=FALSE)`
+
+Each 1cm increase in tumor size is associated with approximately **`r round((exp(coef(logistic_model)["Tumor_Size_Numeric"]) - 1) * 100, 1)`%** higher odds of recurrence.
+```{r roc-curve}
+bc_data$predicted_prob <- predict(logistic_model, type = "response")
+
+roc_curve <- roc(bc_data$Recurrence, bc_data$predicted_prob)
+
+plot(roc_curve, main="ROC Curve for Recurrence Prediction Model",
+     col="blue", lwd=2, print.auc=FALSE)
+
+auc_value <- auc(roc_curve)
+text(0.6, 0.2, paste("AUC =", round(auc_value, 3)), col="red", cex=1.5)
+```
+
+### Model Performance
+
+The model's overall performance was evaluated using ROC curve analysis, which yielded an **Area Under the Curve (AUC) of `r round(auc(roc_curve), 3)`**. This AUC value indicates **good discriminative ability**, as it's substantially better than chance (0.5) though not excellent (>0.8). The ROC curve visualizes the trade-off between sensitivity (true positive rate) and specificity (true negative rate) at various threshold settings.
+
+This model demonstrates that tumor characteristics, particularly malignancy grade and lymph node involvement, are important predictors of breast cancer recurrence. These findings align with clinical understanding of breast cancer biology and could help inform prognostic assessments and treatment planning for patients.
+
+---
+
+# Conclusions
+
+This analysis demonstrates that several factors are significantly associated with breast cancer recurrence, including tumor size, number of invasive nodes, and degree of malignancy. The logistic regression model combining these factors provides a clinically useful tool for predicting recurrence risk, which could help in treatment planning and follow-up care.
+
+## Major Findings
+
+**1. Tumor Characteristics and Recurrence:** Patients who experienced recurrence had significantly larger tumors (mean 29.24cm vs. 25.21cm, p=0.001), highlighting tumor size as an important prognostic factor. The degree of malignancy emerged as the strongest predictor of recurrence in our logistic regression model, with each one-unit increase in malignancy grade more than doubling recurrence odds (OR=2.09, 95% CI: 1.39-3.18). This reinforces the critical importance of tumor grade in treatment planning and follow-up protocols.
+
+**2. Nodal Involvement Pattern:** The significant relationship between invasive nodes and recurrence (OR=1.12 per additional node, p=0.008) supports current clinical practice emphasizing more intensive treatment and closer surveillance for node-positive patients. The weak but significant correlation between tumor size and nodal involvement (r=0.16, p=0.007) suggests that while larger tumors tend to have more nodal spread, size alone is an imperfect predictor of nodal status, necessitating direct pathological assessment.
+
+**3. Radiation Therapy Associations:** The significantly higher recurrence rate in patients who received radiation therapy (45.59% vs. 24.77%, p=0.002) likely reflects appropriate treatment selection rather than treatment failure. Patients with more aggressive disease features typically receive radiation therapy, and our findings suggest that current risk stratification protocols correctly identify higher-risk patients for more intensive therapy.
+
+**4. Predictive Modeling Implications:** Our logistic regression model for recurrence prediction achieved moderate discriminative ability (AUC=0.725), suggesting that even basic clinical parameters can provide meaningful risk stratification. However, the model's limited performance highlights the need for incorporating additional biomarkers and molecular features in modern recurrence prediction tools.
+
+**5. Age and Location Independence:** Interestingly, age and tumor location (breast quadrant) showed no significant associations with tumor size or malignancy degree, suggesting that these factors may be less relevant for prognosis in this population.
+
+---
+
+# Limitations
+
+Our analysis of breast cancer recurrence factors has several important limitations that should be considered when interpreting the results:
+
+## Sample Size and Generalizability
+
+The dataset is relatively small (n=286), which limits statistical power, particularly for subgroup analyses. This may have prevented us from detecting smaller but clinically meaningful differences, especially in the age group comparisons where no significant differences were found.
+
+## Data Structure Limitations
+
+The categorical nature of original variables required numeric conversion, which may have introduced measurement error. For example, tumor size ranges were converted to midpoints (e.g., "30-34cm" → 32cm), which assumes uniform distribution within ranges. The true values may be skewed toward either end of these intervals, potentially affecting regression coefficients.
+
+## Statistical Assumptions
+
+Several key variables, including tumor size and invasive node count, demonstrated significant departures from normality (Shapiro-Wilk p < 0.001). While we proceeded with parametric tests due to our adequate sample size, the non-normal distributions may have affected the validity of p-values, particularly in smaller subgroup analyses.
+
+## Model Diagnostic Issues
+
+In our multiple regression model predicting invasive nodes (Question 7), we identified a critical limitation with observation #64, which had perfect leverage (1.0) due to being the only patient in the 20-29 age group. This resulted in unstable age coefficients and potentially biased the overall model.
+
+## Limited Clinical Variables
+
+The dataset lacks important modern prognostic factors for breast cancer, including hormone receptor status, HER2 status, molecular subtypes, detailed treatment information, and genomic profiles. These factors are now known to strongly influence recurrence risk in contemporary practice, limiting the clinical applicability of our findings.
+
+## Observational Study Design
+
+This retrospective analysis cannot establish causality between the variables studied and breast cancer recurrence. For example, while radiation therapy was associated with higher recurrence rates, this likely reflects selection bias, where patients with higher-risk disease characteristics received more aggressive treatments rather than radiation causing recurrence.
+
+## Temporal Relevance
+
+The dataset may not reflect current breast cancer management approaches, which have evolved significantly with the introduction of targeted therapies, improved surgical techniques, and more personalized treatment planning.
+
+Despite these limitations, this analysis provides valuable insights into factors associated with breast cancer recurrence and demonstrates the application of various statistical methods to analyze clinical data. Future studies with larger, more diverse patient populations and more comprehensive clinical information would help validate and extend these findings.
+
+---
+
+# Enhanced Clinical Interpretations
+
+## Improved Methodology Justifications
+
+**Test Selection Rationale:** For comparing tumor size between recurrence groups (Question 3), we employed Welch's t-test despite the non-normal distributions identified by Shapiro-Wilk tests. This decision was justified by our sample sizes exceeding 30 in both groups, which provides robustness to non-normality through the Central Limit Theorem. Additionally, Welch's modification accounts for the unequal variances observed between groups (SD=8.78 vs. 10.99).
+
+**Regression Approach:** For Question 12, we selected logistic regression to model recurrence risk because of its ability to estimate probabilities and odds ratios while controlling for multiple predictors simultaneously. The binary nature of our outcome variable (recurrence vs. no recurrence) made logistic regression more appropriate than linear models. We evaluated model performance using AUC rather than accuracy to account for the class imbalance in our dataset (30% recurrence rate).
+
+**ANOVA Implementation:** For examining tumor size differences across age groups (Question 9), we conducted a one-way ANOVA followed by Tukey's post-hoc tests for pairwise comparisons. Despite finding no significant differences (F(5,280)=0.413, p=0.84), we reported all pairwise comparisons to provide transparency about potential trends that might achieve significance with larger sample sizes.
+
+**Multivariate Model Building:** In our approach to identifying the best predictors of tumor size (Question 8), we systematically compared nested models with increasing complexity. We prioritized adjusted R-squared over raw R-squared to penalize model complexity and prevent overfitting. This principled approach revealed that the simplest model (invasive nodes and malignancy grade) provided the most parsimonious fit.
+
+---
+
+# Reference
+
+Matjaz Zwitter, M. S. (1988). Breast Cancer [Dataset]. UCI Machine Learning Repository. https://doi.org/10.24432/C51P4M
+
+---
+
+*Analysis completed as part of MS in Health Informatics program at Boston University*  
+*Last Updated: October 2025*
